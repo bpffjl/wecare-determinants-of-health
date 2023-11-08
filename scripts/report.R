@@ -8,20 +8,20 @@ library(purrr)
 # Parameters --------------------------------------------------------------
 
 
-data_file <-  "WECARE-Assessments-Month-09-01-2023.xlsx"
-data_month <- "2023-09-01"
+in_file <- "WECARE DataPull 1.xlsx"
+in_start_date <- "2023-05-01"
 
 # Render CPI data collection tool -----------------------------------------
 
 
-file_name = glue::glue("monthly-wecare-update-{data_month}-{lubridate::today()}.pptx")
+file_name = glue::glue("wecare-sdoh-questions-{in_start_date}-{lubridate::today()}.html")
 
 
 rmarkdown::render(input = here::here("scripts",
                                      "report.Rmd"),
                   params = list(
-                    in_file = data_file,
-                    in_start_date=data_month
+                    in_file = in_file,
+                    in_start_date=in_start_date
                   ),
                   output_file = 
                     here::here("output",

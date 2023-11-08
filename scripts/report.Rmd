@@ -163,211 +163,39 @@ prep_03 %>%
   skim()
 ```
 
-
-## WECARE Assessments Completed
-```{r}
-prep_01 <- d %>% 
-  summarise(n=n_distinct(intake_id)) %>% 
-  mutate(label="WECARE Assessments Completed") %>% 
-  select(label,n)
-prep_01
-```
-
-## Tribal programs made referrals
-find number in WECARE teams folder
-
-## WECARE Assessments with no response needed
-```{r}
-prep_02 <- tall_q %>% 
-  group_by(intake_id,value,.drop=FALSE) %>% 
-  count() %>% 
-  ungroup() %>%
-  filter(value=="Urgent Need") %>% 
-  filter(n==0) %>% 
-  summarise(n=n_distinct(intake_id)) %>% 
-  mutate(label="WECARE Assessments with no response needed") %>% 
-  select(label,n)
-prep_02
-```
-
-## Families identified an Urgent Need
-```{r}
-prep_03 <- tall_q %>% 
-  inner_join(family_assessments) %>% 
-  group_by(intake_id,value,.drop=FALSE) %>% 
-  count() %>% 
-  ungroup() %>%
-  filter(value=="Urgent Need") %>% 
-  filter(n>0) %>% 
-  summarise(n=n_distinct(intake_id)) %>% 
-  mutate(label="Families identified an Urgent Need") %>% 
-  select(label,n)
-prep_03
-```
-
-## Individuals identified an Urgent Need
-```{r}
-prep_07 <- tall_q %>% 
-  anti_join(family_assessments) %>% 
-  group_by(intake_id,value,.drop=FALSE) %>% 
-  count() %>% 
-  ungroup() %>%
-  filter(value=="Urgent Need") %>% 
-  filter(n>0) %>% 
-  summarise(n=n_distinct(intake_id)) %>% 
-  mutate(label="Individuals identified an Urgent Need") %>% 
-  select(label,n)
-prep_07
-```
-
-
-
-
-## Referrals were made to tribal programs
+## Count assessments by response
 
 ```{r}
-prep_04 <- 
-  tall_q %>% 
-  filter(value=="Urgent Need") %>% 
-  count() %>% 
-  mutate(label="Referrals were made to tribal programs") %>% 
-  select(label,n)
-prep_04
+tbl_1 <- 
+  prep_03 %>% 
+  group_by(value_aligned) %>% 
+  summarise(n = n_distinct(intake_id)) %>% 
+  arrange(desc(value_aligned)) %>% 
+  ungroup()
+
+tbl_1
 ```
 
-
-## Substance abuse related referrals were made
+## Count assessments by response and referred office
 
 ```{r}
-prep_05 <- 
-  tall_q %>% 
-  filter(
-    name == "emotional_substance_use_question_one_substance_use_is_effecting_my_family_and_i_need_help" |
-      name == "emotional_substance_use_question_two_i_am_active_in_sobriety_and_would_be_willing_to_help_others" |
-      name == "emotional_substance_use_question_three_i_would_like_more_information_about_addiction" |
-      name == "emotional_substance_use_question_five_i_would_like_more_information_about_support_services" |
-      name == "emotional_children_question_one_i_have_concerns_about_my_children_having_behavioral_broblems_at_school_home_or_in_the_community"| 
-      name == "emotional_children_question_one_i_have_concerns_about_my_children_having_behavioral_broblems_at_school_home_or_in_the_community"|
-      name == "emotional_client_question_one_i_have_experience_a_traumatic_event_in_my_life" |
-      name == "emotional_client_question_two_do_you_feel_sad_or_unhappy_frequently" |
-      name == "emotional_client_question_three_i_believe_me_or_my_children_would_benefit_from_mental_health_services"|
-      name == "emotional_substance_use_question_one_substance_use_is_effecting_my_family_and_i_need_help" |
-      name == "emotional_substance_use_question_two_i_am_active_in_sobriety_and_would_be_willing_to_help_others" |
-      name == "emotional_substance_use_question_three_i_would_like_more_information_about_addiction" |
-      name == "emotional_substance_use_question_five_i_would_like_more_information_about_support_services"
-    ) %>% 
-  filter(    
-    value == "Urgent Need"
-  ) %>%
-  distinct() %>% 
-  count() %>% 
-  mutate(label="Substance Abuse referrals were made") %>% 
-  select(label,n)
-prep_05
+tbl_2 <- 
+  prep_03 %>% 
+  group_by(value_aligned,program) %>% 
+  summarise(n = n_distinct(intake_id)) %>% 
+  arrange(desc(value_aligned),program) %>% 
+  ungroup()
+
+tbl_2
 ```
 
-
-## Warm handoffs made connecting families
-Find numbers in rite track notes and program referral reminder email responses 
-
-## Top 3 programs that received referrals
+## Save excel
 
 ```{r}
-# prep_06 <- 
-# tall_q %>% 
-#   left_join(question_list) %>% 
-#   rename(referral_program=program) %>% 
-#   mutate(
-#   referral_program=as.factor(referral_program)) %>% 
-#   filter(value=="Urgent Need"|
-#            (referral_program=="Enrollments"& value=="Yes")|
-#          (referral_program=="CHR"& value=="Yes")) %>% 
-#   group_by(referral_program,.drop=FALSE) %>% 
-#   summarize(n=n_distinct(intake_id)) %>% 
-#   arrange(desc(n)) %>% 
-#   mutate(label="Top 3 programs where referrals were made") %>% 
-#   select(label,referral_program,n)
-# prep_06
+write_xlsx(list("Overall" = tbl_1, "By referred program" = tbl_2),path = here::here("output","xlsx",
+                                               glue::glue("wecare-sdoh-question-{params$in_start_date}.xlsx")
+                                               )
+)
 ```
 
-## Save to xlsx
-
-### List of dataframes
-
-```{r}
-df_list <- mget(ls(pattern = "^prep_.*"))
-```
-
-### remove "prep_" from data frame names
-
-```{r}
-names(df_list) <- 
-  names(df_list) %>% 
-  str_remove("prep_")
-```
-
-### Define File Name
-
-```{r}
-excel_file_name <- 
-paste0("monthly_wecare_update","_",str_replace_all(params$in_start_date,"-","_"),
-                      "_created_",
-                      str_replace_all(Sys.Date(),"-","_"),
-                      ".xlsx")  
-  
-```
-
-
-
-### Save
-```{r}
-output <- bind_rows(df_list)
-```
-
-
-```{r}
-output %>% 
-  write_xlsx(
-    here::here("output",
-               "excel",
-               excel_file_name
-               )
-  )
-```
-
-
-### Reformat Excel
-```{r}
-wb <- 
-  loadWorkbook(
-    file=here::here("output",
-               "excel",
-               excel_file_name
-               )
-  )
-```
-
-
-```{r}
-# setColWidths(wb,sheet=1,cols=1:length(output),
-#              widths = 
-#                c(43.71,
-#                  8.43,
-#                  38.14))
-```
-
-```{r}
-style <- createStyle(halign = "center")
-addStyle(wb,sheet = 1,cols = 2,rows = 2:(nrow(output)+1),style = style)
-```
-
-
-```{r}
-saveWorkbook(wb,
-             file=here::here("output",
-               "excel",
-               excel_file_name
-               ),
-             overwrite = TRUE)
-```
 
