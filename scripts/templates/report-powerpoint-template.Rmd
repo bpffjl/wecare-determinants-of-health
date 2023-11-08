@@ -1,0 +1,553 @@
+---
+title: "title of presentation"
+author: "author"
+date: "`r lubridate::today()`"
+output: powerpoint_presentation
+params:
+  in_file_path: "file path to the data file"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE,
+                      dpi = 300,
+                      fig.width = 9,
+                      fig.height = 5)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(ggthemes)
+library(MNColorrrs)
+library(fastDummies)
+library(odbc)
+library(english)
+library(ggrepel)
+library(tigris)
+library(sf)
+library(ggwordcloud)
+library(flextable)
+library(sandwich)
+library(lmtest)
+library(broom)
+library(DescTools)
+library(oddsratio)
+library(patchwork)
+library(rstatix)
+library(eaesdrrr)
+library(readxl)
+library(DBI)
+options(tigris_class = "sf")
+options(tigris_use_cache = TRUE)
+load(params$in_file_path)
+create_folders()
+```
+
+```{r data warehouse, include=FALSE}
+dw_uid <- rstudioapi::showPrompt( #PW for connecting to the DW
+  title = "What is your PW?",
+  message = "What is your PW?",
+  default = "")
+
+con <- dbConnect(odbc::odbc(),
+                 "Terapass",
+                 timeout = Inf,
+                 UID = keyring::key_list("data-warehouse")[1,2],
+                 PWD = keyring::key_get("data-warehouse", dw_uid),
+                 big.int = "numeric")
+
+```
+
+```{r}
+program_names <- 
+  con |> 
+  tbl(
+    sql(
+      "select distinct * from Maxisviews.ProgramDimV"
+    )
+  ) |> 
+  collect()
+
+program_names <- 
+  program_names |> 
+  mutate(ProgramName = 
+           case_when(ProgramName == "Food Stamps" ~ "SNAP",
+                     ProgramName == "Minnesota Family Investment Program" ~ "MFIP",
+                     TRUE ~ ProgramName),
+         ProgramName = factor(ProgramName))
+```
+
+
+```{r}
+waiver = tribble(~date_start, ~date_end, ~period, 
+                 d %>% summarise(min(report_month)) %>% pull(),as_date("2020-03-01"), "Before waiver",
+                 # as_date("2020-03-01"),as_date("2020-04-01"), "Early waiver",
+                 as_date("2020-03-01"),as_date("2020-09-01"), "Waiver",
+                 as_date("2020-09-01"),as_date("2020-11-01"), "Waiver\nsuspeneded",
+                 as_date("2020-11-01"),as_date("2021-06-01"), "Waiver",
+                 as_date("2021-06-01"),d %>% summarise(max(report_month)) %>% pull() %m+% months(4),"Waiver\nended") %>%
+  mutate(date = as_date(date_start + as.duration(interval(date_start,date_end))/2)) %>% 
+  pivot_longer(-period)
+
+```
+
+```{r}
+month_start <- d |> summarise(min(report_month)) |> pull()
+month_end <- d |> summarise(max(report_month)) |> pull()
+mnths <- seq.Date(
+  from = month_start,
+  to = month_end,
+  by = 'months'
+)
+```
+
+```{r}
+d <- d |> left_join(program_names) |> mutate(ProgramName = fct_drop(ProgramName))
+c <- c |> left_join(program_names) |> mutate(ProgramName = fct_drop(ProgramName))
+ui <- ui |> left_join(program_names) |> mutate(ProgramName = fct_drop(ProgramName))
+```
+
+```{r}
+timeline <- read_excel(
+  path = here::here("data","COVID TImeline.xlsx"),
+  col_types = c("text", "text", "numeric",
+                "numeric", "text", "date", "date",
+                "skip", "skip", "skip", "skip",
+                "skip", "skip", "skip", "skip",
+                "skip", "skip", "skip", "skip",
+                "skip", "skip", "skip", "skip",
+                "skip", "skip", "skip", "skip",
+                "skip", "skip", "skip", "skip"
+                ))
+
+timeline <- timeline |> 
+  mutate_at(vars(Start,End),~ymd(.))
+
+timeline <- timeline |> 
+  arrange(Start,desc(End)) |> 
+  rownames_to_column(var = 'y') |> 
+  mutate(y = as.numeric(y)) %>% 
+                 filter(!is.na(Start))
+
+```
+
+```{r}
+case_count <- function(in_connection, in_month, in_program_id)
+{
+  in_connection %>% 
+    tbl(
+      sql(
+        glue::glue(
+          "
+SELECT
+count (DISTINCT a.CaseNumber) as n
+, DATE'{in_month}' as report_month
+FROM MaxisViews.CAFSApprovalV a -- 
+WHERE a.BenefitMonth < Add_Months(DATE'{in_month}' , +1) 
+AND a.BenefitMonth >= Add_Months(DATE'{in_month}' , -25)
+AND a.DerivedEndDate > DATE'{in_month}' -- prompt date
+AND a.ProgramStatCode = 'A' 
+AND a.ResultCode <> 'I' 
+AND a.ProgramID = '{in_program_id}'
+"
+        )
+      )
+    ) %>% 
+  collect()
+}
+
+timeline_end <- timeline %>% 
+  summarise(max(month_end)) %>% 
+  pull()
+
+timeline_start <- as.Date("2019-01-01")
+
+mnths <- seq.Date(from = timeline_start,
+                  to = timeline_end,
+                  by = "months")
+
+mfip_case_count <- 
+  mnths %>% 
+  purrr::map_dfr(~case_count(in_connection = con, in_month = ., in_program_id = 'MF'))
+  
+```
+
+```{r}
+timeline_count <- timeline %>% nrow()
+
+mfip_min <- mfip_case_count %>% summarise(min(n)) %>% pull()
+
+mfip_max <- mfip_case_count %>% summarise(max(n)) %>% pull()
+
+mfip_distance <- (mfip_max - mfip_min)/timeline_count
+
+y_mfip <- tibble(y_mfip = seq(from = mfip_min,
+                    to = mfip_max,
+                    length.out = timeline_count))
+
+timeline <- timeline %>% bind_cols(y_mfip)
+
+timeline <- timeline |> 
+  mutate(y_min = lag(y_mfip)) |> 
+  mutate(y_min = replace_na(y_min,mfip_min - mfip_distance)) 
+```
+
+
+```{r}
+
+
+prep_1 <- 
+  bind_rows(
+    churn_FS |> 
+      mutate(Program = 'SNAP'),
+    churn_MF|> 
+      mutate(Program = 'MFIP')) |> 
+  filter(report_month < max(report_month))
+prep_2 <- prep_1 |> 
+  mutate(churn_1 = Churn_Cases - ChurnMoreThanOnce) |> 
+  mutate(per_churn_active = Churn_Cases/Active_Cases,
+         per_churn_1_close = churn_1/Case_Closures,
+         per_churn_2_close = ChurnMoreThanOnce/Case_Closures,
+         per_churn_close = Churn_Cases/Case_Closures) |> 
+  select(Program,report_month,starts_with("per_")) |> 
+  pivot_longer(cols = starts_with("per_")) |> 
+  mutate(name = factor(name)) |> 
+  mutate(name = fct_recode(name,
+                           "Active that churn" = "per_churn_active",
+                           "Churn once in the year" = "per_churn_1_close",
+                           "Churn more than once in the year" = "per_churn_2_close",
+                           "Total churn" = "per_churn_close"
+                           )) |> 
+  mutate(name = fct_rev(name)) |> 
+  mutate(Program = fct_rev(Program))
+
+prep_2_a <-  
+  prep_2 |>
+  filter(name == "Churn once in the year" | name == "Churn more than once in the year") 
+
+prep_2_b <-
+  prep_2 |> 
+  filter(name == "Active that churn" | name == "Total churn")
+
+year_to_fct <- function(in_data)
+{  
+  in_data %>% 
+    mutate(report_month = case_when(report_month == ymd(params$month_start_pandemic) ~ "Pandemic",
+                                  TRUE ~ as.character(year(report_month))),
+         report_month = fct_relevel(report_month, "Pandemic", after = Inf))
+}
+
+
+prep_2_a <- prep_2_a %>% year_to_fct()
+
+prep_2_b <- prep_2_b %>% year_to_fct()
+
+text_size_labels <- 5
+
+text_size <- 15
+
+line_size <- 1
+```
+
+## MFIP churn
+
+```{r}
+
+p <- prep_2_b %>% 
+  filter(Program == 'MFIP' & name == "Total churn") %>% 
+  filter(report_month %in% c("2019", "2020", "Pandemic")) %>% 
+  ggplot() +
+  # geom_bar(data = prep_2_a  %>% filter(Program == 'MFIP'),
+  #          aes(x = report_month,y = value, fill = name),
+  #          stat = 'identity',position = 'stack') +
+  # geom_text(data = prep_2_a  %>% filter(Program == 'MFIP'),
+  #          aes(x = report_month,y = value, label = scales::percent(value,accuracy = 1L)),
+  #          color = 'white',
+  #          size = text_size,
+  #           position = position_stack(vjust = .25)) +
+  geom_bar(aes(x = report_month,y = value,fill = name),
+           stat = 'identity',position = 'stack') +
+  geom_text(aes(x = report_month,y = value - .02,
+               label = scales::percent(value,accuracy = 1L)
+               ), 
+            color = "white",
+           size = text_size_labels,
+           show.legend = FALSE
+           # color = name,
+            # position = position_stack(vjust = .25)
+           ) +
+  # facet_grid(~Program,scales = 'free') +
+  labs(
+    caption = str_wrap("Yearly data 2019, 2020 and pandemic period (cases open with possibility for closure from April 2020 –March 2021, re-opening through May 2021)",width = 80)
+  ) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_mn_state(palette = "primary brand",
+                      guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  scale_color_mn_state(palette = "safety",
+                      guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  scale_linetype(guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  theme_fivethirtyeight() +
+    themer()+
+  theme(legend.position = 'none',
+        legend.box = 'horizontal',
+        text = element_text(size = text_size))
+
+
+p
+```
+
+## MFIP closures
+
+```{r}
+period_text_size = 3
+
+prep <- 
+  tibble("report_month" = mnths) %>% 
+  full_join(c) %>% 
+  filter(ProgramID == "MF") %>% 
+  mutate(MAXIS_CloseReason = 
+           case_when(MAXIS_CloseReason=="Monthly Income" ~ MAXIS_CloseReason,
+                                       MAXIS_CloseReason=="Fail To File" ~ MAXIS_CloseReason,
+                                       MAXIS_CloseReason=="Sanction Limit" ~ "Sanction or time limit",
+                                       MAXIS_CloseReason=="TANF Time Limit" ~ "Sanction or time limit",
+                                       TRUE ~ "Other"),
+         MAXIS_CloseReason = factor(MAXIS_CloseReason)) %>% 
+  group_by(report_month,MAXIS_CloseReason     ,.drop = FALSE) %>% 
+  summarise(cases = n_distinct(CaseNumber)) %>% 
+  ungroup() %>% 
+  filter(MAXIS_CloseReason %in% c("Monthly Income","Fail To File"))
+
+prep_max <- prep %>% 
+  summarise(max(cases)) %>% 
+  pull
+
+prep <- 
+  prep %>% 
+  left_join(
+    prep %>% 
+      filter(report_month == min(report_month)) %>% 
+      rename(cases_1 = cases) %>% 
+      select(-report_month),
+    by = 'MAXIS_CloseReason'
+  ) %>% 
+  mutate(prop = 100*(cases/cases_1))
+
+ggplot() +
+  geom_line(data = prep, aes(x = report_month, y = cases, color = MAXIS_CloseReason),
+            size = line_size) +
+  geom_ribbon(data = waiver,
+              aes(x = value,
+                  ymin = 0,
+                  ymax = prep_max*1.2,
+                  fill = period),
+              alpha = .25) +
+  geom_text(data=waiver %>%
+              group_by(period) %>%
+              filter(name == 'date') %>% 
+  mutate(y = 1.1*prep_max,
+         y = case_when(period == "Waiver\nsuspeneded" ~ y*.95,
+                       TRUE ~ y)),
+            aes(x=value, 
+                label=period,
+                y = y),
+            vjust = 1,
+            size = period_text_size,
+            fontface = "bold") +
+  facet_grid(~MAXIS_CloseReason) +
+   theme_fivethirtyeight() +
+  labs(
+    
+    # subtitle = "MFIP",
+    caption = "Source: MN DHS EAESD") +  
+  scale_fill_mn_state(palette = "extended accent") +
+  scale_color_mn_state(palette = "accent") +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1)) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "none",
+    legend.direction = "horizontal",
+    axis.text.x = element_text(angle = 90),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white"),
+    legend.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    legend.key = element_rect(fill = "white"),
+    strip.text.y = element_text(angle = 0),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+        text = element_text(size = text_size)
+  ) + 
+  guides(fill = FALSE)
+```
+
+## MFIP closures
+
+```{r}
+period_text_size = 3
+
+prep <- 
+  tibble("report_month" = mnths) %>% 
+  full_join(c) %>% 
+  filter(ProgramID == "MF") %>% 
+  mutate(MAXIS_CloseReason = 
+           case_when(MAXIS_CloseReason=="Monthly Income" ~ MAXIS_CloseReason,
+                                       MAXIS_CloseReason=="Fail To File" ~ MAXIS_CloseReason,
+                                       MAXIS_CloseReason=="Sanction Limit" ~ "Sanction or time limit",
+                                       MAXIS_CloseReason=="TANF Time Limit" ~ "Sanction or time limit",
+                                       TRUE ~ "Other"),
+         MAXIS_CloseReason = factor(MAXIS_CloseReason)) %>% 
+  group_by(report_month,MAXIS_CloseReason     ,.drop = FALSE) %>% 
+  summarise(cases = n_distinct(CaseNumber)) %>% 
+  ungroup() %>% 
+  filter(MAXIS_CloseReason %in% c("Fail To File"))
+
+prep_max <- prep %>% 
+  summarise(max(cases)) %>% 
+  pull
+
+prep <- 
+  prep %>% 
+  left_join(
+    prep %>% 
+      filter(report_month == min(report_month)) %>% 
+      rename(cases_1 = cases) %>% 
+      select(-report_month),
+    by = 'MAXIS_CloseReason'
+  ) %>% 
+  mutate(prop = 100*(cases/cases_1))
+
+ggplot() +
+  geom_line(data = prep, aes(x = report_month, y = cases, color = MAXIS_CloseReason),
+            size = line_size) +
+  geom_ribbon(data = waiver,
+              aes(x = value,
+                  ymin = 0,
+                  ymax = prep_max*1.2,
+                  fill = period),
+              alpha = .25) +
+  geom_text(data=waiver %>%
+              group_by(period) %>%
+              filter(name == 'date'),
+            aes(x=value, 
+                label=period,
+                y = prep_max*1.1),
+            vjust = 1,
+            size = period_text_size,
+            fontface = "bold") +
+  facet_grid(~MAXIS_CloseReason) +
+   theme_fivethirtyeight() +
+  labs(
+    
+    # subtitle = "MFIP",
+    caption = "Source: MN DHS EAESD") +  
+  scale_fill_mn_state(palette = "extended accent") +
+  scale_color_mn_state(palette = "accent") +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1)) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "none",
+    legend.direction = "horizontal",
+    axis.text.x = element_text(angle = 90),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white"),
+    legend.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    legend.key = element_rect(fill = "white"),
+    strip.text.y = element_text(angle = 0),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+        text = element_text(size = text_size)
+  ) + 
+  guides(fill = FALSE)
+```
+
+## MFIP closures
+
+```{r}
+period_text_size = 3
+
+prep <- 
+  tibble("report_month" = mnths) %>% 
+  full_join(c) %>% 
+  filter(ProgramID == "MF") %>% 
+  mutate(MAXIS_CloseReason = 
+           case_when(MAXIS_CloseReason=="Monthly Income" ~ MAXIS_CloseReason,
+                                       MAXIS_CloseReason=="Fail To File" ~ MAXIS_CloseReason,
+                                       MAXIS_CloseReason=="Sanction Limit" ~ "Sanction or time limit",
+                                       MAXIS_CloseReason=="TANF Time Limit" ~ "Sanction or time limit",
+                                       TRUE ~ "Other"),
+         MAXIS_CloseReason = factor(MAXIS_CloseReason)) %>% 
+  group_by(report_month,MAXIS_CloseReason     ,.drop = FALSE) %>% 
+  summarise(cases = n_distinct(CaseNumber)) %>% 
+  ungroup() %>% 
+  filter(MAXIS_CloseReason %in% c("Monthly Income"))
+
+prep_max <- prep %>% 
+  summarise(max(cases)) %>% 
+  pull
+
+prep <- 
+  prep %>% 
+  left_join(
+    prep %>% 
+      filter(report_month == min(report_month)) %>% 
+      rename(cases_1 = cases) %>% 
+      select(-report_month),
+    by = 'MAXIS_CloseReason'
+  ) %>% 
+  mutate(prop = 100*(cases/cases_1))
+
+ggplot() +
+  geom_line(data = prep, aes(x = report_month, y = cases, color = MAXIS_CloseReason),
+            size = line_size) +
+  geom_ribbon(data = waiver,
+              aes(x = value,
+                  ymin = 0,
+                  ymax = prep_max*1.2,
+                  fill = period),
+              alpha = .25) +
+  geom_text(data=waiver %>%
+              group_by(period) %>%
+              filter(name == 'date'),
+            aes(x=value, 
+                label=period,
+                y = prep_max*1.1),
+            vjust = 1,
+            size = period_text_size,
+            fontface = "bold") +
+  facet_grid(~MAXIS_CloseReason) +
+   theme_fivethirtyeight() +
+  labs(
+    
+    # subtitle = "MFIP",
+    caption = "Source: MN DHS EAESD") +  
+  scale_fill_mn_state(palette = "extended accent") +
+  scale_color_mn_state(palette = "accent") +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1)) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "none",
+    legend.direction = "horizontal",
+    axis.text.x = element_text(angle = 90),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white"),
+    legend.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    legend.key = element_rect(fill = "white"),
+    strip.text.y = element_text(angle = 0),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+        text = element_text(size = text_size)
+  ) + 
+  guides(fill = FALSE)
+```
+

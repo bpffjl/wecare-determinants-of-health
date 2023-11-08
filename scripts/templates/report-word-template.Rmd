@@ -1,0 +1,809 @@
+---
+output: 
+  word_document:
+    reference_docx: "../templates/title_of_report.docx"
+params:
+  in_file_path: "file path to the data file"
+  report_issue: "name of series if it has one"
+  report_title: "name of report"
+  report_author: "Taylor Vonderharr and Ben Jaques-Leslie"
+---
+
+```{r setup, echo = FALSE,message = FALSE,warning = FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7,
+                      fig.height = 4.5, 
+                      dpi = 300,
+                      fig.align = "center")
+library(tidyverse)
+library(lubridate)
+library(eaesdrrr)
+library(ggplot2)
+library(MNColorrrs)
+library(ggthemes)
+library(ggrepel)
+library(ggalluvial)
+library(english)
+library(DBI)
+library(tigris)
+library(sf)
+library(DBI)
+options(tigris_class = "sf")
+options(tigris_use_cache = TRUE)
+```
+
+```{r data warehouse, include=FALSE}
+dw_uid <- rstudioapi::showPrompt( #PW for connecting to the DW
+  title = "What is your PW?",
+  message = "What is your PW?",
+  default = "")
+
+con <- dbConnect(odbc::odbc(),
+                 "Terapass",
+                 timeout = Inf,
+                 UID = keyring::key_list("data-warehouse")[1,2],
+                 PWD = keyring::key_get("data-warehouse", dw_uid),
+                 big.int = "numeric")
+
+```
+
+```{r}
+text_size = 15
+```
+
+```{r}
+
+ditch_the_axes <- 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.title = element_blank())
+```
+
+```{r}
+
+mn_tribes = c("Leech Lake",
+              "Red Lake",
+              "White Earth",
+              "Bois Forte",
+              "Grand Portage",
+              "Fond du Lac",
+              "Prairie Island",
+              "Lower Sioux",
+              "Upper Sioux",
+              "Shakopee Mdewakanton Sioux",
+              "Mille Lacs")
+
+f_df = data.frame(mn_tribes,
+                  people =c("Ojibwe","Ojibwe","Ojibwe","Ojibwe","Ojibwe","Ojibwe","Dakota","Dakota","Dakota","Dakota","Ojibwe"))
+
+nat <- native_areas(cb = TRUE) 
+mn20 <- counties("MN", cb = TRUE, resolution = "20m")
+urban <- urban_areas(cb = TRUE) %>% filter(NAME10 == "Minneapolis--St. Paul, MN--WI")
+dhs <- call_geolocator(street = "444 Lafayette Rd",
+                       city = "St. Paul",
+                       state = "MN",
+                       zip = "55155")
+mn_block <- blocks(state = 'MN', county = "Ramsey")
+dhs_block <- mn_block %>% filter(GEOID10 == "271230330002037")
+
+nat = nat %>% filter(NAME %in% mn_tribes)
+
+nat_mn = nat %>% inner_join(f_df, by = c("NAME" = "mn_tribes"))
+
+nat_mn <- cbind(nat_mn, st_coordinates(st_centroid(nat_mn)))
+mn20 <- cbind(mn20, st_coordinates(st_centroid(mn20)))
+urban <- cbind(urban, st_coordinates(st_centroid(urban)))
+dhs_block <- cbind(dhs_block, st_coordinates(st_centroid(dhs_block)))
+
+nat_mn = nat_mn %>%
+  mutate(NAME = case_when(NAME != "Leech Lake" ~ paste(NAME,"Nation"),
+                          TRUE ~ NAME))
+# %>%
+#   mutate(NAME = str_wrap(NAME, width = 15))
+```
+
+```{r}
+p_map <- 
+  ggplot() +
+  geom_sf(data = mn20, color = "white", fill = "#003865", alpha = .25) +
+  # geom_sf(data = urban, color = "black", fill = "#78BE21", alpha = .25) +
+  geom_sf(data = dhs_block, color = "black", fill = "#78BE21", alpha = .25) +
+  geom_sf(data = nat_mn %>% filter(people=="Ojibwe"), color = "black", fill = "#78BE21", alpha = .5) +
+  geom_sf(data = nat_mn %>% filter(people=="Dakota"), color = "black", fill = "#78BE21", alpha = .5) +
+  geom_label_repel(data = nat_mn %>% filter(NAME==params$agency),
+                   aes(X,Y,label = NAME), 
+                   size = 2.5,
+                   force             = 0.5,
+                   nudge_y       = 45.6 -  filter(nat_mn,NAME==params$agency)$Y ,
+                   nudge_x       = -92 - filter(nat_mn,NAME==params$agency)$X ,
+                   # direction         = "y",
+                   hjust             = 0,
+                   segment.size      = .75,
+                   segment.curvature = -0.1,
+                   segment.linetype = 1,
+                   segment.color = 'black',
+                   arrow = arrow(length = unit(0.015, "npc"))) +
+  geom_label_repel(data = dhs_block,
+                   aes(X,Y,label = str_wrap("MN Department of Human Services", width = 17)),
+                   size = 2.5,
+                   force             = 0.5,
+                   nudge_y       = 45.1 -  urban$Y ,
+                   nudge_x       = -92 - urban$X ,
+                   # direction         = "y",
+                   hjust             = 0,
+                   segment.size      = .75,
+                   segment.curvature = -0.1,
+                   segment.linetype = 1,
+                   segment.color = 'black',
+                   arrow = arrow(length = unit(0.015, "npc"))) +
+  theme_fivethirtyeight() +
+  scale_fill_mn_state(palette = "accent") +
+  scale_color_mn_state(palette = "accent") +
+  # labs(caption = 'Source: EAESD Research Unit') +
+  theme(
+    title = element_text(size = text_size),
+    legend.title = element_blank(),
+    # axis.text = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    # axis.title = element_text(),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white"),
+    legend.background = element_rect(fill = "white"),
+    strip.background = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    strip.text = element_text(size = text_size),
+    legend.text = element_text(size = text_size)
+  ) +
+  ditch_the_axes
+```
+
+```{r}
+allu_1 <- tribble(
+  ~id, ~text, ~stage,
+  1,"WECARE assessments","First evaluation meeting",
+  2,"Family night surveys","First evaluation meeting",
+  # 3,NA,"First evaluation meeting",
+  4,"Manduwatu focus groups","First evaluation meeting",
+  # 5,NA,"First evaluation meeting",
+  6,"Coordinating meeting surveys","First evaluation meeting",
+  7,"Participant surveys","First evaluation meeting",
+  8,"Partner organization interviews","First evaluation meeting",
+  1,"WECARE assessments","Early in collaboration",
+  2,"Family night surveys","Early in collaboration",
+  # 3,NA, "Early in collaboration",
+  4,"Manduwatu focus groups","Early in collaboration",
+  5,"WECARE care plan goals","Early in collaboration",
+  6,"Coordinating meeting surveys","Early in collaboration",
+  7,"Participant surveys","Early in collaboration",
+  8,"Partner organization interviews","Early in collaboration",
+  1,"WECARE assessments","Later in collaboration",
+  2,"Family night surveys","Later in collaboration",
+  3,"White Earth Nation survey","Later in collaboration",
+  4,"Manduwatu monthly survey","Later in collaboration",
+  5,"Manduwatu monthly survey","Later in collaboration",
+  6,"Coordinating meeting surveys","Later in collaboration",
+  7,"Participant surveys","Later in collaboration",
+  8,"Partner organization interviews","Later in collaboration",
+  1,"Ongoing", "Current status",
+  2,"Ongoing", "Current status",
+  3,"In preparation", "Current status",
+  4,"In preparation", "Current status",
+  5,"In preparation", "Current status",
+  6,"Delayed", "Current status",
+  7,"Delayed", "Current status",
+  8,"Delayed", "Current status",
+  ) %>% 
+  mutate(id = as.integer(id),
+         text = fct_relevel(text,
+                            "WECARE assessments",
+                            "Family night surveys",
+                            "White Earth Nation survey",
+                            "Manduwatu focus groups",
+                            "WECARE care plan goals",
+                            "Coordinating meeting surveys",
+                            "Participant surveys",
+                            "Partner organization interviews",
+                            "Manduwatu monthly survey",
+                            "Ongoing",
+                            "In preparation",
+                            "Delayed"
+         ),
+         stage = fct_relevel(stage, "First evaluation meeting", "Early in collaboration",
+                             "Later in collaboration","Current status")) %>% 
+  select(id, stage, text)
+
+allu_2 <- allu_1 %>% 
+  arrange(id,stage) %>% 
+  group_by(id) %>% 
+  summarise(stage = first(stage),
+            lab = first(text))
+
+allu_1 <- allu_1 %>% left_join(allu_2) %>% 
+  mutate(lab = case_when(text == "Manduwatu monthly survey" ~ text,
+                         stage == "Current status" ~ text,
+                         TRUE ~ lab))
+
+p_eval <- 
+  ggplot(allu_1,
+       aes(x = stage, stratum = text, alluvium = id,
+           fill = text, label = text)) +
+  # scale_fill_brewer(type = "qual", palette = "Set2") +
+  geom_flow(stat = "alluvium", lode.guidance = "frontback",
+            color = "darkgray") +
+  geom_stratum(color = 'darkgray') +
+  geom_text(stat = "stratum", aes(label = str_wrap(lab,width = 20))) +
+  theme_fivethirtyeight() +
+  scale_fill_mn_state(palette = 'extended accent',
+                      guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  themer() +
+  theme(
+    legend.position = 'none', 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_blank()
+  )
+```
+
+```{r}
+col_text <- "white"
+
+col_fill <- c("#003865", "red3")
+
+phlow_1 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "WECARE data", 10, 30, 80, 95, "White Earth Nation", 
+  "Data analysis", 10, 30, 55, 70,"White Earth Nation", 
+  "Report", 10, 30, 30, 45, "White Earth Nation"
+)
+
+phlow_1 <- phlow_1 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+phlow_1 <- phlow_1 %>% 
+  mutate(xend = lead(horizontal_middle),
+         yend = lead(top))
+
+phlow_2 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "Fake data", 60, 80, 90, 100, "White Earth Nation", 
+  "Draft data analysis", 60, 80, 70, 80,"MN Department of Human Services", 
+  "Real data", 60, 80, 50, 60, "White Earth Nation",
+  "Update analysis", 60, 80, 30, 40, "Collaboration",
+  "Final analysis", 60, 80, 10, 20, "White Earth Nation",
+)
+
+phlow_2 <- phlow_2 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+phlow_2 <- phlow_2 %>% 
+  mutate(xend = lead(horizontal_middle),
+         yend = lead(top))
+
+phlow_3 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "Test analysis", 45, 65, 30, 40,"White Earth Nation", 
+  "Analysis and coding support", 70, 100, 30, 40,"MN Department of Human Services"
+)
+
+phlow_3 <- phlow_3 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+phlow_2 <- phlow_2 %>% 
+  mutate(
+    xend = 
+      case_when(text == "Real data" ~
+                  phlow_3 %>% filter(text == 'Test analysis') %>% pull(horizontal_middle),
+                TRUE ~
+                  xend),
+    yend = 
+      case_when(text == "Real data" ~
+                  phlow_3 %>% filter(text == 'Test analysis') %>% pull(top),
+                TRUE ~
+                  yend)
+  )
+
+p_data_analysis <- 
+  ggplot() +
+  geom_rect(data = phlow_1,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = phlow_1,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_segment(data = phlow_1,
+               aes(x = horizontal_middle, y = bottom, xend = xend, yend = yend, fill = owner),
+               size=0.15, linejoin = "mitre", lineend = "butt",
+               arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  geom_rect(data = phlow_2 %>% filter(text != "Update analysis"),
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = phlow_2 %>% filter(text != "Update analysis"),
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_segment(data = phlow_2 %>% filter(text != "Update analysis"),
+               aes(x = horizontal_middle, y = bottom, xend = xend, yend = yend, fill = owner),
+               size=0.15, linejoin = "mitre", lineend = "butt",
+               arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  geom_rect(data = phlow_3 ,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25, size=0.25) +
+  geom_text(data = phlow_3 ,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_curve(aes(x = phlow_1 %>% filter(text == 'Data analysis') %>% pull(right),
+                   xend = phlow_2 %>% filter(text == 'Fake data') %>% pull(left),
+                   y = phlow_1 %>% filter(text == 'Data analysis') %>% pull(top),
+                   yend = phlow_2 %>% filter(text == 'Fake data') %>% pull(top)
+  ),
+  color = 'black',
+  curvature = -0.2) +
+  geom_segment(aes(x = phlow_3 %>% filter(text == 'Test analysis') %>% pull(horizontal_middle),
+                   xend = phlow_2 %>% filter(text == 'Final analysis') %>% pull(horizontal_middle),
+                   y = phlow_3 %>% filter(text == 'Test analysis') %>% pull(bottom),
+                   yend = phlow_2 %>% filter(text == 'Final analysis')%>% pull(top)
+  ),
+  size=0.15, linejoin = "mitre", lineend = "butt",
+  arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  geom_segment(aes(x = phlow_3 %>% filter(text == 'Test analysis') %>% pull(right),
+                 xend = phlow_3 %>% filter(text != 'Test analysis') %>% pull(left),
+                 y = phlow_3 %>% filter(text == 'Test analysis') %>% pull(vertical_middle),
+                 yend = phlow_3 %>% filter(text == 'Test analysis') %>% pull(vertical_middle)
+  ),
+  size=0.15, linejoin = "mitre", lineend = "butt",
+  arrow = arrow(length = unit(1, "mm"), type= "closed", ends = "both")
+  ) +
+  geom_curve(aes(x = phlow_1 %>% filter(text == 'Data analysis') %>% pull(right),
+                 xend = phlow_2 %>% filter(text == 'Final analysis') %>% pull(left),
+                 y = phlow_1 %>% filter(text == 'Data analysis') %>% pull(bottom),
+                 yend = phlow_2 %>% filter(text == 'Final analysis') %>% pull(bottom)
+  ),
+  color = 'black',
+  curvature = 0.2
+  ) +
+  theme_fivethirtyeight() +
+  # scale_fill_mn_state(palette = 'extended accent',
+  #                     guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  scale_fill_manual(values = alpha(col_fill, 1),
+                      guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  themer() +
+  theme(
+    legend.position = 'bottom', 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_blank()
+  )
+```
+
+```{r}
+col_text <- "white"
+
+half_dist <- 1
+
+col_fill <- c(
+  # "#003865",
+  "red3")
+
+flow_1_a <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "Tribal Council", 0, 80, 80, 100, "White Earth Nation"
+)
+
+flow_1_a <- flow_1_a %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+flow_1 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "Director of Finance",0,10-half_dist,50,70,"White Earth Nation",
+  "Director of Human Resources",10+half_dist,20-half_dist,50,70,"White Earth Nation",
+  "Director of Maintenance",20+half_dist,30-half_dist,50,70,"White Earth Nation",
+  "Director of Public Heath",30+half_dist,40-half_dist,50,70,"White Earth Nation",
+  "Director of Human Services",40+half_dist,50-half_dist,50,70,"White Earth Nation",
+  "Director of Education",50+half_dist,60-half_dist,50,70,"White Earth Nation",
+  "Director of Economic Development",60+half_dist,70-half_dist,50,70,"White Earth Nation",
+  "Director of Public Safety",70+half_dist,80,50,70,"White Earth Nation"
+)
+
+flow_1 <- flow_1 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+flow_1 <- flow_1 %>% 
+  mutate(x = flow_1_a %>% filter(text == "Tribal Council") %>% pull(horizontal_middle),
+         y = flow_1_a %>% filter(text == "Tribal Council") %>% pull(bottom)
+         )
+
+flow_1_b <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "Coordinator of Public Heath",0,60,20,40,"White Earth Nation",
+  "Coordinator of Human Services",65,80,20,40,"White Earth Nation"
+)
+
+flow_1_b <- flow_1_b %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+flow_1_b <- flow_1_b %>% 
+  mutate(x = case_when(text == "Coordinator of Public Heath" ~
+                         flow_1 %>% filter(text == "Director of Public Heath") %>% pull(horizontal_middle),
+                       text == "Coordinator of Human Services" ~
+                         flow_1 %>% filter(text == "Director of Human Services") %>% pull(horizontal_middle)),
+         y = case_when(text == "Coordinator of Public Heath" ~ 
+                         flow_1 %>% filter(text == "Director of Public Heath") %>% pull(bottom),
+                       text == "Coordinator of Human Services" ~
+                         flow_1 %>% filter(text == "Director of Human Services") %>% pull(bottom)
+                         )
+  )
+
+flow_2 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "WECARE", 10, 50, -20, 10, "White Earth Nation"
+)
+
+flow_2 <- flow_2 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/5)
+
+flow_3 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "2-Generation", 20, 40, -10, 0, "White Earth Nation",
+  "Workforce Center", 65, 80, -10, 0, "White Earth Nation"
+)
+
+flow_3<- flow_3 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+flow_3 <- flow_3 %>% 
+  mutate(x = case_when(text == "2-Generation" ~
+                         flow_1_b %>% filter(text == "Coordinator of Public Heath") %>% pull(horizontal_middle),
+                       text == "Workforce Center" ~
+                         flow_1_b %>% filter(text == "Coordinator of Human Services") %>% pull(horizontal_middle)),
+         y = case_when(text == "2-Generation" ~ 
+                         flow_1_b %>% filter(text == "Coordinator of Public Heath") %>% pull(bottom),
+                       text == "Workforce Center" ~
+                         flow_1_b %>% filter(text == "Coordinator of Human Services") %>% pull(bottom)
+                         )
+  )
+
+flow_4 <- tribble(
+  ~text, ~left, ~right, ~bottom, ~top, ~owner,
+  "Evaluation", 5, 15, 5, 15, "White Earth Nation",
+  "Manduwatu", 5, 15, -25, -15, "White Earth Nation",
+  "Manduwatu", 45, 55, -25, -15, "White Earth Nation",
+  "Manduwatu", 45, 55, 5, 15, "White Earth Nation"
+)
+
+seg_1 <- tibble(
+  x = flow_2 %>% pull(right),
+  y = flow_3 %>% filter(text == "Workforce Center") %>% pull(vertical_middle),
+  xend = flow_3 %>% filter(text == "Workforce Center") %>% pull(left),
+  yend = flow_3 %>% filter(text == "Workforce Center") %>% pull(vertical_middle)
+                 )
+
+flow_4<- flow_4 %>% 
+  mutate(horizontal_middle  = left + (right - left)/2,
+         vertical_middle = bottom + (top - bottom)/2)
+
+flow_1 <- flow_1 %>% 
+  mutate(text = str_wrap(text,width = 12))
+
+flow_1_b <- flow_1_b %>% 
+  mutate(text = case_when(text == "Coordinator of Human Services" ~ str_wrap(text,width = 12),
+                          TRUE ~ text))
+
+p_governance <-
+  ggplot() +
+  geom_rect(data = flow_1_a,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = flow_1_a,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_rect(data = flow_1,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = flow_1,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_segment(data = flow_1,
+               aes(x = horizontal_middle, y = y, xend = horizontal_middle, yend = top, fill = owner),
+               size=0.15, linejoin = "mitre", lineend = "butt",
+               arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  geom_rect(data = flow_1_b,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = flow_1_b,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_segment(data = flow_1_b,
+               aes(x = x, y = y, xend = horizontal_middle, yend = top, fill = owner),
+               size=0.15, linejoin = "mitre", lineend = "butt",
+               arrow = arrow(length = unit(1, "mm"), type= "closed")) +
+  geom_rect(data = flow_2,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            linetype = 'dashed',
+            size=0.25) +
+  geom_text(data = flow_2,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+  geom_rect(data = flow_3,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = flow_3,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+     geom_segment(data = flow_3,
+               aes(x = x, y = y, xend = horizontal_middle, yend = top, fill = owner),
+               size=0.15, linejoin = "mitre", lineend = "butt",
+               arrow = arrow(length = unit(1, "mm"), type= "closed",
+                             ends = "both")) +
+   geom_rect(data = flow_4,
+            aes(xmin = left, xmax = right, ymin = bottom, ymax = top, fill = owner),
+            color='black',
+            size=0.25) +
+  geom_text(data = flow_4,
+            aes(x = horizontal_middle, y = vertical_middle, label = text, fill = owner),
+            size=2.5,
+            color = col_text,
+            fontface = "bold") +
+     geom_segment(data = seg_1,
+               aes(x = x, y = y, xend = xend, yend = yend),
+               size=0.15, linejoin = "mitre", lineend = "butt",
+               arrow = arrow(length = unit(1, "mm"), type= "closed",
+                             ends = "both"),
+               linetype = "dashed") +
+  theme_fivethirtyeight() +
+  # scale_fill_mn_state(palette = 'extended accent',
+  #                     guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  scale_fill_manual(values = alpha(col_fill, 1),
+                      guide = guide_legend(position = "bottom", direction = "horizontal")) +
+  themer() +
+  theme(
+    legend.position = 'none', 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_blank()
+  )
+```
+
+```{r}
+fig_n <- 0
+```
+
+```{r, fig.width=3.5}
+knitr::include_graphics(here::here("images","dhslogo.png"), dpi = 400)
+```
+
+# `r params$report_issue`
+
+# `r params$report_title`
+
+### `r params$report_author`
+
+## `r lubridate::today() %>% nice_date()`
+
+## Summary
+
+Developing useful collaborations between organizations on evaluation and data analysis is challenging. Frequently, lack of trust as well as constraints and inflexibility procedures and rules can derail potentially useful partnerships. As part of the Minnesota 2-Generation Policy Network, White Earth Nation and the Minnesota Department of Human Services began to work together on a initiative to provide wrap around services to people seeking assistance from tribal programs. Part of the collaboration included evaluation and data analysis. The institutions developed a novel relationship leveraging evaluation and analysis at the Department and the commitment to evaluation and rich data of the program at White Earth Nation. This partnership provides a good example of what conditions created a good collaboration and how institutions can work together. The unique data collected by the program and collaborative analysis may lead to program changes to better serve the White Earth Nation citizens. White Earth Nation and the Minnesota Department of Human Services teamed up to analyze data in a way that honors the participant and creates the potential for strengthened program policy.
+
+## Background
+
+```{r}
+fig_n <- fig_n + 1 
+```
+
+#### Figure `r fig_n`: WECARE program
+
+```{r}
+knitr::include_graphics(here::here("images","WECARE-logo-50.png"), dpi = 400)
+```
+
+From fall 2016 through 2021, White Earth Nation and the Minnesota Department of Human Services collaborated as part of the [Minnesota 2-Generation Policy Network](https://mn.gov/dhs/2-generation/). The White Earth Coordination Assessment Resource & Education (WECARE) program began with a culturally-specific assessment form for people coming to the tribal government to procure services, ranging from smoking cessation and tribal membership to housing and food support. The WECARE assessment encompasses questions related to: financial, mental, emotional, and spiritual questions that help pin point needs a participant may have. Questions also encompassing transportation, childcare, substance abuse, community safety and health allow for a holistic needs assessment for those residing within the boundaries of the White Earth Nation. A tribal council decree instructed all department in White Earth Nation to use WECARE for members coming for services.
+
+Participants indicating an *Urgent Need* for certain questions would have their information forwarded to departments charged with supporting that area of need. The 2-Generation Network supported the expansion of WECARE to create Manduwatu (initially called Kinship Lifepath Navigators). When a family completes a WECARE assessment, indicating multiple urgent needs, Manduwatu coordinate across tribal departments and connect to external services. WECARE also hosts family nights for participants focused on Ojibwe practices like drumming or making baskets, dream catchers, or moccasins. The family nights also foster community connections and links to tribal services (a tribal program is highlighted each month). In addition to financial support, the Department of Human Service offered evaluation and research assistance. The Department had keen interest in learning how WECARE supported participants and wished to take lessons from the program to inform policy and practice. 
+
+```{r}
+fig_n <- fig_n + 1 
+```
+
+#### Figure `r fig_n`: WECARE program model
+
+```{r}
+knitr::include_graphics(here::here("images","WECARE-model-white.png"), dpi = 400)
+```
+
+<!-- WECARE has received `r when_to_use_words(params$WECARE_assessments)` assessments and the Manduwatu have supported `r when_to_use_words(params$twogen_participants)` participants, coordinating across `r when_to_use_words(params$WECARE_programs)` programs. Manduwatu successfully adapted to the COVID-19 pandemic moving serves online, and providing technology to participants to keep connected. The evaluation and research collaboration has changed and evolved through  -->
+
+## Strengths and opportunities
+
+Many factors created potentially good circumstances for WECARE and the Department of Human Services to have a fruitful collaboration on evaluation and data analysis. Interestingly, the mix of constraints and strengths produced a relationship where both organizations needed to participate and deliver outputs. Staff at the Department and White Earth Nation needed to show their work. 
+
+From the beginning of the partnership, WECARE was committed to evaluating the program. In the 2-Generation work, the Department was dedicated to provide flexible support to sites. Early discussions showed that WECARE's rich data and interest in evaluation and the Department's research and data expertise and open source analysis tools created an opportunity. Situated within White Earth Nation, WECARE had some important constraints placed on its ability to share data. Many examples exist of research conducted in native communities violating trust of that community.[^1] Barriers to data sharing are  way to protect participants in tribal programs However, the tribe's clear research review process (see below) allowed WECARE and the Department to collaborate using WECARE data in a manner that would protect participant data and allow the team to learn from the data. Together, this meant that the Department could provide analysis and evaluation support, but the true analysis and evaluation would need to be conducted by WECARE staff. 
+
+From a less institutional and program perspective, staff at WECARE and the department were both invested in the collaboration. WECARE evaluation staff were interested in learning how to use data analysis on WECARE data and develop more coding skills. Department staff were interested in exploring ways to provide practical support to sites in the 2-Generation Network. This data allowed for program evaluation of effectiveness and the ability to analyze data trends unique to the White Earth Nation. 
+
+Below are additional details of areas that helped to establish this partnership. 
+
+### WECARE
+
+* **Tribal sovereignty**: In the scope of the data analysis, tribal sovereignty made it clear that WECARE data belonged to the tribe and would not be directly shared with the Department. This meant that data analysis would need to be conducted by WECARE staff. 
+* **White Earth Institutional Review Board**: Prior to evaluation and analysis, WECARE submitted a research proposal to the White Earth Institutional Review Board (IRB). Developing the proposal forced the team to justify why the research was important and useful to the program and tribe. Bringing honor to those assessed in an ethically and culturally sound way. 
+* **Data rich program**: The WECARE assessment is fully digital with a back-end database controlled by the provider. Unlike many programs, WECARE had data waiting to be analyzed and needed to invest less in new data collection to understand the program. Programs without this type of infrastructure would need spend time collecting data from participants and providers to begin research. With WECARE, data was available.
+* **Part of public health**: Residing within Tribal Health, WECARE was experienced with public health grants and their reporting requirements. The team wanted to apply similar metrics to this program.
+* **Interest in analysis**: At the beginning of the 2-Generation partnership, one WECARE staff person was particularly interested in using quantitative analysis to understand the program. She left White Earth for a new position, but by that time WECARE was invested in the program and a new team member joined to continue the work. 
+* **Established reporting structure**: WECARE is an important but small part of the work that White Earth Nation does. Tribal Council wants to keep informed of the projects work, but will not be part of the details. Leadership interest, but distance, helped create conditions where reproducible, data-centric reports would be useful.
+* **Limited evaluation staff**: Some WECARE staff had experience with evaluation, but no one was tasked solely with conducting monitoring and evaluation of the program. The team was open to hearing recommendations and input from evaluation-focused staff at the Department of Human Services. 
+
+```{r}
+fig_n <- fig_n + 1 
+```
+
+#### Figure `r fig_n`: WECARE Governance
+
+```{r}
+p_governance
+```
+
+### Minnesota Department of Human Services
+
+* **Flexible support**: Department support in the 2-Generation projects was primarily based on the wishes of sites. For WECARE evaluation and analysis assistance, this meant identifying opportunities that would provide the greatest benefit and making assistance available for places there may be gaps. 
+* **Data analysis**: Research staff at the Department have access to a rich database of information about people participating in programs like Supplemental Nutrition Assistance Program (SNAP) and Minnesota Family Investment Program (MFIP). Their data analysis skills have been developed through frequent use of this data. WECARE data is similarly structured. People using WECARE often have needs akin to those who many apply for SNAP and MFIP. The parallels between WECARE and Department data allowed staff to apply these skills to that data. 
+* **Evaluation expertise**: Department research staff have academic and practical experience conducting program evaluations, which could be applied to WECARE and the implementation of Manduwatu support.
+* **Open source tools**: Data analysts can do their work using a variety of tools, including SAS, Tableau, R, Python, and many others. Some of these are proprietary and come with high costs. Others, like R, are open source.[^3] Conducting the analysis in R (and the RStudio infrastructure) incurred no financial costs and allowed for easy code sharing between the Department and White Earth Nation, while not requiring any individual data to be shared with or stored by the Department. This will be discussed in more detail in the [data analysis section](#sec_a).
+* **Separate from cash and food assistance**: Department of Human Services evaluation support came from the research unit that focuses on cash and food assistance. The distance between WECARE and these programs compelled the Department to be more creative in their support, rather than falling back on Department data that was easily accessible. Instead of using the data the Department has access to, staff used their analytic and coding skills to assist WECARE analyze their data. 
+
+
+```{r}
+fig_n <- fig_n + 1 
+```
+
+#### Figure `r fig_n`: Minnesota map
+
+```{r fig.width = 3.5}
+p_map
+```
+
+## Collaboration activities
+
+WECARE and the Department of Human Services evaluation partnership involved three activities: evaluation plans, data collection tools, and data analysis. The most persistent work is data analysis. However, the established evaluation plan created a backbone from which the other activities could operate. 
+
+Below are more details about these core evaluation collaboration activities.
+
+### Evaluation plans
+
+Early in the 2-Generation Network, the Department and WECARE met in White Earth to discuss a range of topics; the day closed with the creation of a draft evaluation plan. The focus of the discussion was on what types of activities could be conducted to learn about WECARE. Neither WECARE nor Manduwatu were established with an evaluation framework in mind. The evaluation structure was established with an eye to monitor the program and track outcomes, rather than assess impact. The focus was to identify areas of possible data collection. At the time, six ideas were named in order of priority: 
+
+1. WECARE assessments
+2. Family night surveys
+3. Manduwatu focus groups
+4. Participant surveys
+5. Coordinating meeting surveys
+6. Partner organization interviews
+
+Data from WECARE assessments is now actively being used to understand the needs of participants. The work done to use this data will be discussed in more detail below in the [data analysis section](#sec_a). At family nights, participants are asked to evaluate the event in a short form. This data collection began soon after the gatherings started. WECARE uses the information to improve the events, but the data is not used for additional analysis. Participant surveys, coordinating meeting surveys, and partner organization interviews have not been implemented. The challenges of COVID and usual staff turnover delayed work on these activities. 
+
+Collecting information about the Manduwatu work with participants has evolved during the time of the collaboration. Initially, the team planned to conduct focus groups with the Manduwatu, but these did not get scheduled mainly because of turnover and COVID. WECARE included functionality to collect participant goals within its database. This data may have been used to understand participant progress toward goals. However as Manduwata worked with the platform to enter and track participant goals, they found the functionality wanting, which reduced its use. Also, the WECARE platform did not produce a data report of participants as part of its existing reports. The team still hopes to build out the functionality of the platform to get reports on participant goals. In order to start gathering data from Manduwatu and about participant goals, the team chose to develop a monthly Manuwatu survey focused on the progress of participants. This survey is currently in development. 
+
+Another evaluation activity is now being developed. WECARE wished to learn the opinions from a wider audience about the program. A short survey was developed with the hope to send to many stakeholders of WECARE, including tribal government and participants. Currently, the survey has been sent to participants in the WECARE 2-Generation project as a test to examine any current or potential barriers participants may have when seeking support. 
+
+The [figure below](#fig_a) illustrates the development of these evaluation activities and their current status. 
+
+```{r}
+fig_n <- fig_n + 1 
+```
+
+#### Figure `r fig_n`: Evaluation activity development {#fig_a}
+
+```{r}
+p_eval
+```
+
+### Data collection tools
+
+WECARE and the Minnesota Department of Human Services also worked together developing data collection tools for some of the activities above. In particular, WECARE consulted with the Department on the White Earth Nation WECARE survey and Manduwatu monthly survey. In both cases, the surveys were in very complete drafts prepared by WECARE staff before being shared with the Department. Evaluation staff at the Department recommendations focused on common survey writing challenges like double-barreled and loaded questions. [^2] The Department also identified response fields in the survey that would not match the response. For example, questions about dates that did not have response fields that were dates. (This helps with data analysis after surveys are collected.) More than anything, Department comments were those of research and evaluator colleagues, which are hard to find in organizations not solely focused on surveys and evaluation. 
+
+### Data analysis {#sec_a}
+
+The principle part of the WECARE and Minnesota Department of Human Services collaboration was the data analysis of WECARE assessment data. The team has met routinely since 2017, increasing to weekly virtual meetings in 2019. These meetings focus on coding for analysis and report production, using pair programming where the Department recommends code and WECARE writes and executes. All analysis has been conducted using R in the RStudio environment, producing spreadsheet reports and powerpoint presentations for leadership and key stakeholders. 
+
+The analysis focuses on counting the number of WECARE assessments in different categories. This is not statistically intense. However, the richness of the WECARE assessment paints a unique picture of people seeking services from White Earth Nation. At a top level, the number of assessments completed by different staff members and departments is calculated. Participant responses to WECARE urgent needs questions allows the team to see the diversity and depth of needs across the population. For example, highlighting the high number of people with housing needs. 
+
+Establishing the initial analysis project required creativity and flexibility. WECARE to leverage the rich assessment data and wanted the support of the Department for data analysis. The Department hoped to support the analysis, but understood that the data could not be shared. The solution the team came up with is illustrated below in the [data analysis diagram](#fig_b). The first step was for WECARE to create a example data set with fake data. A key component to producing reproducible data analysis is to use the correct data structure. While it is nice to have the real data when writing an analysis, fake data can be used to develop an initial analysis, as long as the structure matches that of real data. In this case, WECARE extracted assessment data into a spreadsheet, deleted the data, while keeping the column titles, and filled in several rows with fictitious example data in the correct types. This fake data was sent to the Department along with a clear set of questions WECARE hoped to see answered through the data. Department evaluation staff wrote a draft analysis script using R. While the analysis was being drafted, WECARE worked with their IT to install R and RStudio onto their machines. When the analysis was completed, WECARE and the Department worked together to create the analysis structure at WECARE. At this point, WECARE applied real data to the analysis script. WECARE and the Department met and tested the analysis script against the real data. When problems arose, the Department recommended code changes to fix errors. After several iterations, the analysis was in a form to share results with leadership. 
+
+```{r}
+fig_n <- fig_n + 1 
+```
+
+#### Figure `r fig_n`: Data analysis diagram {#fig_b}
+
+```{r}
+p_data_analysis
+```
+
+The team has developed an annual report of WECARE assessments of 2-Generation participants for the tribal council and the 2-Generation network. They are also finalizing two other projects. One creates reports for each tribal department that receives WECARE urgent needs notifications. This project is envisioned as a follow up to those notifications, reminding departments of participants who requested their support. For example, if a participant answers *Urgent Need* for housing, a referral is sent to the Human Services department. This report would compile a list of all clients that listed *Urgent Need* for a service that month. All listed departments would then receive this report on a monthly basis, helping for programs to stay organized as well as accountable to those seeking services. 
+
+The other project relates to the evaluation of substance abuse programs. WECARE assessments are filtered to investigate participants identifying a need for help with substance abuse. This data allows for the examination of specific questions related to substance abuse support. The team is examining the relationship with age and family structure to seeking substance abuse help. Geography, the location of individual seeking support, will be investigated, which may lead to a greater understanding of how location relates to substance abuse within White Earth Nation. The team will also examine time trends in referrals for substance abuse support, in particular exploring the relationship with the COVID pandemic. Lastly, they will create recurring reports of substance abuse referrals to help monitor other related programs in an ongoing basis. 
+
+## Conclusion
+
+The White Earth Nation and Minnesota Department of Human Services collaboration on evaluation and data analysis presents a unique example of two government institutions working in cooperation. The Minnesota 2-Generation Network created an infrastructure for this partnership. Tribal sovereignty and prioritizing data protection meant that analysis of WECARE would need to be conducted by the tribe on its tribal members. Department experience in evaluation and data analysis created an opportunity to support analysis of WECARE data. WECARE and the Department worked flexibly and creatively to generate evaluation plans, data collection tools, and data analyses. This work has helped to understand how WECARE is working and identify ways to improve the program. The assortment of constraints and strengths created a base from which the effort could evolve, while the creativity allowed it to produce insights and lessons.  
+
+```{r}
+knitr::include_graphics(here::here("images","dhs_ada_advisory.png"), dpi = 400)
+```
+
+[^1]: Cochran, P. A., Marshall, C. A., Garcia-Downing, C., Kendall, E., Cook, D., McCubbin, L., & Gover, R. M. (2008). Indigenous ways of knowing: implications for participatory research and community. American journal of public health, 98(1), 22–27. https://doi.org/10.2105/AJPH.2006.093641
+[^2]: Open source refers to programs that make their code freely available for modification and distribution. Frequently, users develop code that is shared with other users to extend the functionality of the software, which is the case with R.
+[^3]: Double-barreled questions are really two (or more) questions masquerading as one. Loaded questions make assumptions about the respondent that cause the survey to be less inclusive. 
+
+
+```{r drop tables}
+# rm(format_state_applications_current_weekly,
+#    format_state_applications_early_weekly)
+```
+
+```{r save data}
+# df_list <- 
+#   list(d,
+#     covid_area,
+#     covid_line
+#     )
+# 
+# df_list %>% 
+# # bind_rows(df_list) %>% 
+#   # arrange(ProgramID,current_week) %>% 
+#   writexl::write_xlsx(here::here("output",
+#                       "excel",
+#                       glue::glue("snap-campaign-applications-{Sys.Date()}.xlsx")))
+```
+
+
+
+```{r disconnect}
+# con %>% dbDisconnect()
+```
+
+
+```{r remove data, results='hide'}
+rm(list=ls())
+gc()
+
+```
